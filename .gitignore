@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Environment & secrets
+.env
+.env.*
+*.env
+config/secrets.*
+*.pem
+*.key
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+
+# User uploads (don't push user data)
+uploads/
+*/uploads/
+
+# Build outputs
+dist/
+build/
+.next/
+.cache/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Misc
+docs/
