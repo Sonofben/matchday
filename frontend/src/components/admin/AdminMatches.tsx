@@ -22,7 +22,7 @@ export function AdminMatches({ token }: { token: string }) {
   const [lineupMatch, setLineupMatch] = useState<Match | null>(null)
   const [creating, setCreating] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [form, setForm] = useState({ competition_id: '', home_team_id: '', away_team_id: '', scheduled_at: '', venue: '', referee: '', round: '' })
+  const [form, setForm] = useState({ competition_id: '', home_team_id: '', away_team_id: '', scheduled_at: '', venue: '', referee: '', round: '', is_friendly: false })
 
   async function createMatch() {
     setCreating(true)
@@ -33,9 +33,23 @@ export function AdminMatches({ token }: { token: string }) {
         body: JSON.stringify({ ...form, scheduled_at: new Date(form.scheduled_at).toISOString() }),
       })
       mutate(); setShowCreate(false)
-      setForm({ competition_id: '', home_team_id: '', away_team_id: '', scheduled_at: '', venue: '', referee: '', round: '' })
+      setForm({ competition_id: '', home_team_id: '', away_team_id: '', scheduled_at: '', venue: '', referee: '', round: '', is_friendly: false })
     } catch (e: any) { alert(e.message) }
     finally { setCreating(false) }
+  }
+
+  async function toggleFriendly(id: string, current: boolean) {
+    if (!confirm(current
+      ? 'Mark this match as a COMPETITION match? It will count toward standings.'
+      : 'Mark this match as a FRIENDLY? It will be removed from standings.')) return
+    try {
+      await apiFetch(`/admin/matches/${id}`, {
+        method: 'PATCH',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_friendly: !current }),
+      })
+      mutate()
+    } catch (e: any) { alert(e.message) }
   }
 
   async function updateMatch(id: string, update: Record<string, any>) {
@@ -96,6 +110,21 @@ export function AdminMatches({ token }: { token: string }) {
               </div>
             ))}
           </div>
+
+          {/* Friendly match toggle */}
+          <div className="mt-4 flex items-start gap-3 p-3 rounded-lg bg-slate-800/40 border border-slate-700/60">
+            <input id="is_friendly_chk" type="checkbox" checked={form.is_friendly}
+              onChange={e => setForm(p => ({ ...p, is_friendly: e.target.checked }))}
+              className="mt-0.5 w-4 h-4 accent-blue-500" />
+            <label htmlFor="is_friendly_chk" className="flex-1 cursor-pointer">
+              <div className="text-sm text-white font-medium">This is a friendly match</div>
+              <div className="text-xs text-slate-400 mt-0.5">
+                Friendlies are recorded but do <span className="text-blue-400">NOT</span> count toward
+                standings, points, or competition rankings.
+              </div>
+            </label>
+          </div>
+
           <div className="flex gap-2 mt-4">
             <button onClick={createMatch} disabled={creating || !form.competition_id || !form.home_team_id || !form.away_team_id || !form.scheduled_at}
               className="bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium">
@@ -192,7 +221,20 @@ export function AdminMatches({ token }: { token: string }) {
                 <span className="text-sm text-slate-200 truncate">{m.away_short ?? m.away_team_name}</span>
               </div>
               {m.round && <span className="text-xs text-slate-600 hidden sm:block">{m.round}</span>}
+              {m.is_friendly && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-medium hidden sm:inline-block" title="Does not count toward standings">
+                  FRIENDLY
+                </span>
+              )}
               <div className="flex gap-1 ml-1 flex-shrink-0">
+                <button onClick={() => toggleFriendly(m.id, !!m.is_friendly)}
+                  className={clsx('p-1.5 rounded transition-colors',
+                    m.is_friendly
+                      ? 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30'
+                      : 'bg-slate-800 text-slate-500 hover:text-blue-400')}
+                  title={m.is_friendly ? 'This is a friendly — click to make it a competition match' : 'Mark as friendly (excludes from standings)'}>
+                  <span className="text-[10px] font-bold">F</span>
+                </button>
                 <button onClick={() => setLiveMatch(liveMatch?.id === m.id ? null : m as Match)}
                   className="p-1.5 rounded bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors" title="Live entry">
                   <Zap size={13} />

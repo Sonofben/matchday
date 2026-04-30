@@ -76,7 +76,10 @@ export function MatchCard({ match: m, flash }: Props) {
 
         {/* Round / arrow */}
         <div className="w-20 flex-shrink-0 text-right">
-          {m.round && <span className="text-xs text-slate-600 truncate">{m.round}</span>}
+          {m.is_friendly
+            ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 font-medium">FRIENDLY</span>
+            : m.round && <span className="text-xs text-slate-600 truncate">{m.round}</span>
+          }
           <span className="text-slate-700 group-hover:text-slate-400 ml-1 transition-colors">›</span>
         </div>
       </div>

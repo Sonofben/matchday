@@ -36,6 +36,7 @@ const CreateMatchSchema = z.object({
   venue:          z.string().optional(),
   referee:        z.string().optional(),
   round:          z.string().optional(),
+  is_friendly:    z.boolean().optional().default(false),
 })
 
 const CreateTeamSchema = z.object({
@@ -149,10 +150,10 @@ export async function adminRoutes(app: FastifyInstance) {
     const compRes = await db.query('SELECT half_duration FROM competitions WHERE id=$1', [body.competition_id])
     const halfDuration = compRes.rows[0]?.half_duration ?? 45
     const { rows } = await db.query(`
-      INSERT INTO matches (competition_id,home_team_id,away_team_id,scheduled_at,venue,referee,round,half_duration)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *
+      INSERT INTO matches (competition_id,home_team_id,away_team_id,scheduled_at,venue,referee,round,half_duration,is_friendly)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *
     `, [body.competition_id,body.home_team_id,body.away_team_id,body.scheduled_at,
-        body.venue??null,body.referee??null,body.round??null,halfDuration])
+        body.venue??null,body.referee??null,body.round??null,halfDuration,body.is_friendly ?? false])
     return reply.status(201).send(rows[0])
   })
 
@@ -163,6 +164,31 @@ export async function adminRoutes(app: FastifyInstance) {
     await db.query('DELETE FROM match_stats   WHERE match_id=$1', [req.params.id])
     await db.query('DELETE FROM matches       WHERE id=$1',       [req.params.id])
     return reply.status(204).send()
+  })
+
+  // PATCH /admin/matches/:id — admin can edit/reschedule/toggle friendly after creation
+  app.patch<{ Params: { id: string }; Body: unknown }>('/matches/:id', guard, async (req, reply) => {
+    const body = CreateMatchSchema.partial().parse(req.body)
+    const sets: string[] = []; const params: unknown[] = []; let p = 1
+    const fields = ['competition_id','home_team_id','away_team_id','scheduled_at','venue','referee','round','is_friendly']
+    for (const f of fields) {
+      if ((body as any)[f] !== undefined) { sets.push(`${f}=$${p++}`); params.push((body as any)[f]) }
+    }
+    if (!sets.length) return reply.status(400).send({ error: 'Nothing to update' })
+    params.push(req.params.id)
+    const { rows } = await db.query(
+      `UPDATE matches SET ${sets.join(',')}, updated_at = NOW() WHERE id=$${p} RETURNING *`,
+      params
+    )
+    if (!rows[0]) return reply.status(404).send({ error: 'Match not found' })
+    // If friendly status changed and match is finished, recalc standings for the competition
+    if (body.is_friendly !== undefined && rows[0].status === 'finished') {
+      try {
+        const { recalculateStandings } = await import('./standings.js')
+        await recalculateStandings(rows[0].competition_id)
+      } catch (e) { console.error('Standings recalc after friendly-toggle failed:', e) }
+    }
+    return rows[0]
   })
 
   // ── Teams ─────────────────────────────────────────────────────────────────

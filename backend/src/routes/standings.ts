@@ -39,10 +39,15 @@ export async function standingsRoutes(app: FastifyInstance) {
 
 // Called after every finished match
 export async function recalculateStandings(competitionId: string) {
-  // Get all finished matches for this competition
+  // Get all finished COMPETITION matches (excluding friendlies) for this competition.
+  // Uses the explicit is_friendly column (safe) and falls back to legacy string match
+  // for any rows that pre-date the migration.
   const { rows: matches } = await db.query(`
     SELECT * FROM matches
-    WHERE competition_id = $1 AND status = 'finished' AND (round IS NULL OR round != 'Friendly')
+    WHERE competition_id = $1
+      AND status = 'finished'
+      AND is_friendly = FALSE
+      AND (round IS NULL OR LOWER(TRIM(round)) <> 'friendly')
   `, [competitionId])
 
   // Get all teams in this competition

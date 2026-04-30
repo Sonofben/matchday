@@ -53,6 +53,7 @@ export interface Match {
   venue: string | null
   referee: string | null
   round: string | null
+  is_friendly?: boolean
 }
 
 export interface Standing {

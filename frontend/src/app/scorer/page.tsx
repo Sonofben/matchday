@@ -240,7 +240,7 @@ export default function ScorerPage() {
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-1.5">
                 <span className="text-xs text-slate-500">{m.competition_name}</span>
-                {m.round === 'Friendly'
+                {m.is_friendly
                   ? <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-medium">Friendly</span>
                   : m.round ? <span className="text-xs px-1.5 py-0.5 rounded bg-green-500/10 text-green-500 font-medium">{m.round}</span> : null
                 }
