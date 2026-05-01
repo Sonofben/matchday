@@ -1,0 +1,483 @@
+diff --git a/backend/src/routes/admin.ts b/backend/src/routes/admin.ts
+index bcb5659..fe297be 100644
+--- a/backend/src/routes/admin.ts
++++ b/backend/src/routes/admin.ts
+@@ -36,6 +36,7 @@ const CreateMatchSchema = z.object({
+   venue:          z.string().optional(),
+   referee:        z.string().optional(),
+   round:          z.string().optional(),
++  is_friendly:    z.boolean().optional().default(false),
+ })
+ 
+ const CreateTeamSchema = z.object({
+@@ -149,10 +150,10 @@ export async function adminRoutes(app: FastifyInstance) {
+     const compRes = await db.query('SELECT half_duration FROM competitions WHERE id=$1', [body.competition_id])
+     const halfDuration = compRes.rows[0]?.half_duration ?? 45
+     const { rows } = await db.query(`
+-      INSERT INTO matches (competition_id,home_team_id,away_team_id,scheduled_at,venue,referee,round,half_duration)
+-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *
++      INSERT INTO matches (competition_id,home_team_id,away_team_id,scheduled_at,venue,referee,round,half_duration,is_friendly)
++      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *
+     `, [body.competition_id,body.home_team_id,body.away_team_id,body.scheduled_at,
+-        body.venue??null,body.referee??null,body.round??null,halfDuration])
++        body.venue??null,body.referee??null,body.round??null,halfDuration,body.is_friendly ?? false])
+     return reply.status(201).send(rows[0])
+   })
+ 
+@@ -165,6 +166,31 @@ export async function adminRoutes(app: FastifyInstance) {
+     return reply.status(204).send()
+   })
+ 
++  // PATCH /admin/matches/:id — admin can edit/reschedule/toggle friendly after creation
++  app.patch<{ Params: { id: string }; Body: unknown }>('/matches/:id', guard, async (req, reply) => {
++    const body = CreateMatchSchema.partial().parse(req.body)
++    const sets: string[] = []; const params: unknown[] = []; let p = 1
++    const fields = ['competition_id','home_team_id','away_team_id','scheduled_at','venue','referee','round','is_friendly']
++    for (const f of fields) {
++      if ((body as any)[f] !== undefined) { sets.push(`${f}=$${p++}`); params.push((body as any)[f]) }
++    }
++    if (!sets.length) return reply.status(400).send({ error: 'Nothing to update' })
++    params.push(req.params.id)
++    const { rows } = await db.query(
++      `UPDATE matches SET ${sets.join(',')}, updated_at = NOW() WHERE id=$${p} RETURNING *`,
++      params
++    )
++    if (!rows[0]) return reply.status(404).send({ error: 'Match not found' })
++    // If friendly status changed and match is finished, recalc standings for the competition
++    if (body.is_friendly !== undefined && rows[0].status === 'finished') {
++      try {
++        const { recalculateStandings } = await import('./standings.js')
++        await recalculateStandings(rows[0].competition_id)
++      } catch (e) { console.error('Standings recalc after friendly-toggle failed:', e) }
++    }
++    return rows[0]
++  })
++
+   // ── Teams ─────────────────────────────────────────────────────────────────
+   app.post<{ Body: unknown }>('/teams', guard, async (req, reply) => {
+     const body = CreateTeamSchema.parse(req.body)
+diff --git a/backend/src/routes/standings.ts b/backend/src/routes/standings.ts
+index 6a4c249..aaa0533 100644
+--- a/backend/src/routes/standings.ts
++++ b/backend/src/routes/standings.ts
+@@ -39,10 +39,15 @@ export async function standingsRoutes(app: FastifyInstance) {
+ 
+ // Called after every finished match
+ export async function recalculateStandings(competitionId: string) {
+-  // Get all finished matches for this competition
++  // Get all finished COMPETITION matches (excluding friendlies) for this competition.
++  // Uses the explicit is_friendly column (safe) and falls back to legacy string match
++  // for any rows that pre-date the migration.
+   const { rows: matches } = await db.query(`
+     SELECT * FROM matches
+-    WHERE competition_id = $1 AND status = 'finished' AND (round IS NULL OR round != 'Friendly')
++    WHERE competition_id = $1
++      AND status = 'finished'
++      AND is_friendly = FALSE
++      AND (round IS NULL OR LOWER(TRIM(round)) <> 'friendly')
+   `, [competitionId])
+ 
+   // Get all teams in this competition
+diff --git a/frontend/src/app/competitions/[id]/page.tsx b/frontend/src/app/competitions/[id]/page.tsx
+index b8d0da0..451dd96 100644
+--- a/frontend/src/app/competitions/[id]/page.tsx
++++ b/frontend/src/app/competitions/[id]/page.tsx
+@@ -108,45 +108,70 @@ export default function CompetitionPage() {
+       )}
+ 
+       {/* Standings */}
+-      {tab === 'Standings' && (
+-        <Card>
+-          <div className="overflow-x-auto">
+-            <table className="w-full text-sm">
+-              <thead>
+-                <tr className="border-b border-slate-800">
+-                  {['#','Team','P','W','D','L','GF','GA','GD','Pts','Form'].map(h => (
+-                    <th key={h} className="text-left px-3 py-2.5 text-xs text-slate-500 font-medium">{h}</th>
+-                  ))}
+-                </tr>
+-              </thead>
+-              <tbody className="divide-y divide-slate-800/60">
+-                {((standings as any)?.standings ?? []).map((s: Standing, i: number) => (
+-                  <tr key={s.team_id} className="hover:bg-slate-800/30">
+-                    <td className="px-3 py-3 text-slate-500 text-xs">{s.position ?? i+1}</td>
+-                    <td className="px-3 py-3">
+-                      <div className="flex items-center gap-2">
+-                        <TeamLogo name={s.team_name} logoUrl={s.logo_url} size={18} />
+-                        <span className="text-slate-200 font-medium">{s.team_name}</span>
+-                      </div>
+-                    </td>
+-                    <td className="px-3 py-3 text-center text-slate-400">{s.played}</td>
+-                    <td className="px-3 py-3 text-center text-green-400">{s.won}</td>
+-                    <td className="px-3 py-3 text-center text-yellow-400">{s.drawn}</td>
+-                    <td className="px-3 py-3 text-center text-red-400">{s.lost}</td>
+-                    <td className="px-3 py-3 text-center text-slate-400">{s.goals_for}</td>
+-                    <td className="px-3 py-3 text-center text-slate-400">{s.goals_against}</td>
+-                    <td className={clsx('px-3 py-3 text-center', s.goal_difference > 0 ? 'text-green-400' : s.goal_difference < 0 ? 'text-red-400' : 'text-slate-400')}>
+-                      {s.goal_difference > 0 ? `+${s.goal_difference}` : s.goal_difference}
+-                    </td>
+-                    <td className="px-3 py-3 text-center font-bold text-white">{s.points}</td>
+-                    <td className="px-3 py-3"><FormDots form={s.form} /></td>
+-                  </tr>
+-                ))}
+-              </tbody>
+-            </table>
++      {tab === 'Standings' && (() => {
++        const allStandings: Standing[] = (standings as any)?.standings ?? []
++        // Group by group_name; null/empty group_name → 'table' (single league)
++        const grouped = allStandings.reduce<Record<string, Standing[]>>((acc, s) => {
++          const key = (s as any).group_name ?? 'table'
++          if (!acc[key]) acc[key] = []
++          acc[key].push(s)
++          return acc
++        }, {})
++        const groupKeys = Object.keys(grouped).sort()
++        return (
++          <div className="space-y-5">
++            {groupKeys.length === 0 && (
++              <Card className="p-10 text-center text-slate-500 text-sm">No standings yet</Card>
++            )}
++            {groupKeys.map(gk => (
++              <div key={gk}>
++                {gk !== 'table' && (
++                  <h3 className="text-sm font-semibold text-green-400 mb-2 px-1 tracking-wide">
++                    {gk.toLowerCase().startsWith('group') ? gk : `Group ${gk}`}
++                  </h3>
++                )}
++                <Card>
++                  <div className="overflow-x-auto">
++                    <table className="w-full text-sm">
++                      <thead>
++                        <tr className="border-b border-slate-800">
++                          {['#','Team','P','W','D','L','GF','GA','GD','Pts','Form'].map(h => (
++                            <th key={h} className="text-left px-3 py-2.5 text-xs text-slate-500 font-medium">{h}</th>
++                          ))}
++                        </tr>
++                      </thead>
++                      <tbody className="divide-y divide-slate-800/60">
++                        {grouped[gk].map((s: Standing, i: number) => (
++                          <tr key={s.team_id} className="hover:bg-slate-800/30">
++                            <td className="px-3 py-3 text-slate-500 text-xs">{s.position ?? i+1}</td>
++                            <td className="px-3 py-3">
++                              <div className="flex items-center gap-2">
++                                <TeamLogo name={s.team_name} logoUrl={s.logo_url} size={18} />
++                                <span className="text-slate-200 font-medium">{s.team_name}</span>
++                              </div>
++                            </td>
++                            <td className="px-3 py-3 text-center text-slate-400">{s.played}</td>
++                            <td className="px-3 py-3 text-center text-green-400">{s.won}</td>
++                            <td className="px-3 py-3 text-center text-yellow-400">{s.drawn}</td>
++                            <td className="px-3 py-3 text-center text-red-400">{s.lost}</td>
++                            <td className="px-3 py-3 text-center text-slate-400">{s.goals_for}</td>
++                            <td className="px-3 py-3 text-center text-slate-400">{s.goals_against}</td>
++                            <td className={clsx('px-3 py-3 text-center', s.goal_difference > 0 ? 'text-green-400' : s.goal_difference < 0 ? 'text-red-400' : 'text-slate-400')}>
++                              {s.goal_difference > 0 ? `+${s.goal_difference}` : s.goal_difference}
++                            </td>
++                            <td className="px-3 py-3 text-center font-bold text-white">{s.points}</td>
++                            <td className="px-3 py-3"><FormDots form={s.form} /></td>
++                          </tr>
++                        ))}
++                      </tbody>
++                    </table>
++                  </div>
++                </Card>
++              </div>
++            ))}
+           </div>
+-        </Card>
+-      )}
++        )
++      })()}
+ 
+       {/* Teams */}
+       {tab === 'Teams' && (
+diff --git a/frontend/src/app/scorer/page.tsx b/frontend/src/app/scorer/page.tsx
+index ca8e71f..71713c7 100644
+--- a/frontend/src/app/scorer/page.tsx
++++ b/frontend/src/app/scorer/page.tsx
+@@ -240,7 +240,7 @@ export default function ScorerPage() {
+             <div className="flex items-center justify-between mb-2">
+               <div className="flex items-center gap-1.5">
+                 <span className="text-xs text-slate-500">{m.competition_name}</span>
+-                {m.round === 'Friendly'
++                {m.is_friendly
+                   ? <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-medium">Friendly</span>
+                   : m.round ? <span className="text-xs px-1.5 py-0.5 rounded bg-green-500/10 text-green-500 font-medium">{m.round}</span> : null
+                 }
+@@ -505,6 +505,21 @@ export default function ScorerPage() {
+         </button>
+       </div>
+ 
++      {/* Penalties */}
++      <div className="grid grid-cols-4 gap-2 mb-3">
++        {[
++          { label:'PEN ✓ Home', type:'penalty_goal',   teamId:selected.home_team_id, color:'bg-green-800' },
++          { label:'PEN ✗ Home', type:'penalty_missed', teamId:selected.home_team_id, color:'bg-orange-800' },
++          { label:'PEN ✓ Away', type:'penalty_goal',   teamId:selected.away_team_id, color:'bg-green-800' },
++          { label:'PEN ✗ Away', type:'penalty_missed', teamId:selected.away_team_id, color:'bg-orange-800' },
++        ].map(({ label, type, teamId, color }) => (
++          <button key={label} onClick={() => setEventModal({ type, teamId })}
++            className={`${color} hover:opacity-90 active:scale-95 text-white py-3 rounded-xl text-[11px] font-medium leading-tight`}>
++            {label}
++          </button>
++        ))}
++      </div>
++
+       {/* Cards + Subs */}
+       <div className="grid grid-cols-2 gap-2 mb-3">
+         {[
+@@ -527,7 +542,7 @@ export default function ScorerPage() {
+         <div className="bg-[#141920] border border-slate-800 rounded-2xl p-3">
+           <p className="text-xs text-slate-500 mb-2">Recent events</p>
+           {[...(matchDetail.events)].reverse().slice(0,5).map((ev: any, i: number) => {
+-            const icon = ev.event_type === 'goal' || ev.event_type === 'penalty_goal' ? '⚽' : ev.event_type === 'yellow_card' ? '🟨' : ev.event_type === 'red_card' ? '🟥' : ev.event_type === 'substitution' ? '🔄' : '•'
++            const icon = ev.event_type === 'goal' || ev.event_type === 'penalty_goal' ? '⚽' : ev.event_type === 'penalty_missed' ? '❌' : ev.event_type === 'yellow_card' ? '🟨' : ev.event_type === 'red_card' ? '🟥' : ev.event_type === 'substitution' ? '🔄' : '•'
+             const name = ev.display_name ?? (ev.first_name ? `${ev.first_name} ${ev.last_name}` : ev.team_name)
+             return (
+               <div key={`${ev.id}-${i}`} className="flex items-center gap-2 py-1.5 text-xs border-t border-slate-800/50 first:border-0">
+diff --git a/frontend/src/components/admin/AdminMatches.tsx b/frontend/src/components/admin/AdminMatches.tsx
+index b2ae027..bf3780f 100644
+--- a/frontend/src/components/admin/AdminMatches.tsx
++++ b/frontend/src/components/admin/AdminMatches.tsx
+@@ -22,7 +22,7 @@ export function AdminMatches({ token }: { token: string }) {
+   const [lineupMatch, setLineupMatch] = useState<Match | null>(null)
+   const [creating, setCreating] = useState(false)
+   const [expandedId, setExpandedId] = useState<string | null>(null)
+-  const [form, setForm] = useState({ competition_id: '', home_team_id: '', away_team_id: '', scheduled_at: '', venue: '', referee: '', round: '' })
++  const [form, setForm] = useState({ competition_id: '', home_team_id: '', away_team_id: '', scheduled_at: '', venue: '', referee: '', round: '', is_friendly: false })
+ 
+   async function createMatch() {
+     setCreating(true)
+@@ -33,11 +33,25 @@ export function AdminMatches({ token }: { token: string }) {
+         body: JSON.stringify({ ...form, scheduled_at: new Date(form.scheduled_at).toISOString() }),
+       })
+       mutate(); setShowCreate(false)
+-      setForm({ competition_id: '', home_team_id: '', away_team_id: '', scheduled_at: '', venue: '', referee: '', round: '' })
++      setForm({ competition_id: '', home_team_id: '', away_team_id: '', scheduled_at: '', venue: '', referee: '', round: '', is_friendly: false })
+     } catch (e: any) { alert(e.message) }
+     finally { setCreating(false) }
+   }
+ 
++  async function toggleFriendly(id: string, current: boolean) {
++    if (!confirm(current
++      ? 'Mark this match as a COMPETITION match? It will count toward standings.'
++      : 'Mark this match as a FRIENDLY? It will be removed from standings.')) return
++    try {
++      await apiFetch(`/admin/matches/${id}`, {
++        method: 'PATCH',
++        headers: { ...headers, 'Content-Type': 'application/json' },
++        body: JSON.stringify({ is_friendly: !current }),
++      })
++      mutate()
++    } catch (e: any) { alert(e.message) }
++  }
++
+   async function updateMatch(id: string, update: Record<string, any>) {
+     await apiFetch(`/matches/${id}`, {
+       method: 'PATCH',
+@@ -96,6 +110,21 @@ export function AdminMatches({ token }: { token: string }) {
+               </div>
+             ))}
+           </div>
++
++          {/* Friendly match toggle */}
++          <div className="mt-4 flex items-start gap-3 p-3 rounded-lg bg-slate-800/40 border border-slate-700/60">
++            <input id="is_friendly_chk" type="checkbox" checked={form.is_friendly}
++              onChange={e => setForm(p => ({ ...p, is_friendly: e.target.checked }))}
++              className="mt-0.5 w-4 h-4 accent-blue-500" />
++            <label htmlFor="is_friendly_chk" className="flex-1 cursor-pointer">
++              <div className="text-sm text-white font-medium">This is a friendly match</div>
++              <div className="text-xs text-slate-400 mt-0.5">
++                Friendlies are recorded but do <span className="text-blue-400">NOT</span> count toward
++                standings, points, or competition rankings.
++              </div>
++            </label>
++          </div>
++
+           <div className="flex gap-2 mt-4">
+             <button onClick={createMatch} disabled={creating || !form.competition_id || !form.home_team_id || !form.away_team_id || !form.scheduled_at}
+               className="bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium">
+@@ -192,7 +221,20 @@ export function AdminMatches({ token }: { token: string }) {
+                 <span className="text-sm text-slate-200 truncate">{m.away_short ?? m.away_team_name}</span>
+               </div>
+               {m.round && <span className="text-xs text-slate-600 hidden sm:block">{m.round}</span>}
++              {m.is_friendly && (
++                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-medium hidden sm:inline-block" title="Does not count toward standings">
++                  FRIENDLY
++                </span>
++              )}
+               <div className="flex gap-1 ml-1 flex-shrink-0">
++                <button onClick={() => toggleFriendly(m.id, !!m.is_friendly)}
++                  className={clsx('p-1.5 rounded transition-colors',
++                    m.is_friendly
++                      ? 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30'
++                      : 'bg-slate-800 text-slate-500 hover:text-blue-400')}
++                  title={m.is_friendly ? 'This is a friendly — click to make it a competition match' : 'Mark as friendly (excludes from standings)'}>
++                  <span className="text-[10px] font-bold">F</span>
++                </button>
+                 <button onClick={() => setLiveMatch(liveMatch?.id === m.id ? null : m as Match)}
+                   className="p-1.5 rounded bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors" title="Live entry">
+                   <Zap size={13} />
+diff --git a/frontend/src/components/scores/MatchCard.tsx b/frontend/src/components/scores/MatchCard.tsx
+index ea987bf..f4d1c96 100644
+--- a/frontend/src/components/scores/MatchCard.tsx
++++ b/frontend/src/components/scores/MatchCard.tsx
+@@ -76,7 +76,10 @@ export function MatchCard({ match: m, flash }: Props) {
+ 
+         {/* Round / arrow */}
+         <div className="w-20 flex-shrink-0 text-right">
+-          {m.round && <span className="text-xs text-slate-600 truncate">{m.round}</span>}
++          {m.is_friendly
++            ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 font-medium">FRIENDLY</span>
++            : m.round && <span className="text-xs text-slate-600 truncate">{m.round}</span>
++          }
+           <span className="text-slate-700 group-hover:text-slate-400 ml-1 transition-colors">›</span>
+         </div>
+       </div>
+diff --git a/frontend/src/lib/api.ts b/frontend/src/lib/api.ts
+index cd47a53..68a5ddb 100644
+--- a/frontend/src/lib/api.ts
++++ b/frontend/src/lib/api.ts
+@@ -53,6 +53,7 @@ export interface Match {
+   venue: string | null
+   referee: string | null
+   round: string | null
++  is_friendly?: boolean
+ }
+ 
+ export interface Standing {
+diff --git a/migrations/001_add_is_friendly.sql b/migrations/001_add_is_friendly.sql
+new file mode 100644
+index 0000000..8a7fc53
+--- /dev/null
++++ b/migrations/001_add_is_friendly.sql
+@@ -0,0 +1,22 @@
++-- Migration: add is_friendly flag to matches
++-- Run with: psql "$DATABASE_URL" -f migrations/001_add_is_friendly.sql
++
++BEGIN;
++
++-- 1. Add is_friendly column (default FALSE so existing competition matches stay as-is)
++ALTER TABLE matches
++  ADD COLUMN IF NOT EXISTS is_friendly BOOLEAN NOT NULL DEFAULT FALSE;
++
++-- 2. Backfill: any existing match where round was set to "Friendly" (any case) becomes is_friendly = TRUE
++UPDATE matches
++SET    is_friendly = TRUE
++WHERE  LOWER(TRIM(COALESCE(round, ''))) = 'friendly';
++
++-- 3. Helpful index for standings queries
++CREATE INDEX IF NOT EXISTS idx_matches_competition_friendly
++  ON matches (competition_id, is_friendly, status);
++
++COMMIT;
++
++-- After running, verify with:
++--   SELECT id, home_team_id, away_team_id, round, is_friendly, status FROM matches ORDER BY scheduled_at DESC LIMIT 20;
+diff --git a/migrations/002_seed_players.sql b/migrations/002_seed_players.sql
+new file mode 100644
+index 0000000..f6ab253
+--- /dev/null
++++ b/migrations/002_seed_players.sql
+@@ -0,0 +1,101 @@
++-- Seed: bulk-insert players for Saturday Ballers and link them to teams.
++-- Idempotent: safe to re-run; uses NOT EXISTS guards.
++-- Run with: sudo -u postgres psql -d matchday -f migrations/002_seed_players.sql
++
++BEGIN;
++
++-- Helper: define a temp table of incoming roster
++CREATE TEMP TABLE incoming_roster (
++  team_name      TEXT,
++  first_name     TEXT,
++  last_name      TEXT,
++  display_name   TEXT,
++  jersey_number  INTEGER,
++  position       position_type
++) ON COMMIT DROP;
++
++-- ─── SUPERSEDE FC ─────────────────────────────────────────────
++INSERT INTO incoming_roster (team_name, first_name, last_name, display_name, jersey_number, position) VALUES
++  ('Supersede FC', 'Beejay',  'Beejay',  'BEEJAY',  NULL, NULL),
++  ('Supersede FC', 'Seun',    'Seun',    'SEUN',    NULL, NULL),
++  ('Supersede FC', 'Isijola', 'Isijola', 'ISIJOLA', NULL, NULL),
++  ('Supersede FC', 'Yinka',   'Yinka',   'YINKA',   NULL, NULL),
++  ('Supersede FC', 'Simon',   'Simon',   'SIMON',   NULL, NULL),
++  ('Supersede FC', 'Burna',   'Burna',   'BURNA',   NULL, NULL),
++  ('Supersede FC', 'Ibrahim', 'Ibrahim', 'IBRAHIM', NULL, NULL),
++  ('Supersede FC', 'Wahab',   'Wahab',   'WAHAB',   NULL, NULL),
++  ('Supersede FC', 'Charger', 'Charger', 'CHARGER', NULL, NULL),
++  ('Supersede FC', 'Bamz',    'Bamz',    'BAMZ',    NULL, NULL),
++  ('Supersede FC', 'Savior',  'Savior',  'SAVIOR',  NULL, NULL),
++  ('Supersede FC', 'Adeola',  'Adeola',  'ADEOLA',  NULL, NULL);
++
++-- ─── AMIGOS FC ────────────────────────────────────────────────
++INSERT INTO incoming_roster (team_name, first_name, last_name, display_name, jersey_number, position) VALUES
++  ('Amigos FC', 'Omotayo', 'Omotayo', 'Omotayo', 19, 'defender'),
++  ('Amigos FC', 'Khedira', 'Khedira', 'Khedira',  6, 'midfielder');
++
++-- ─── LIKE A BAT FC ────────────────────────────────────────────
++INSERT INTO incoming_roster (team_name, first_name, last_name, display_name, jersey_number, position) VALUES
++  ('Like A Bat FC', 'Big',         'Nass',       'Big Nass',         10, 'midfielder'),
++  ('Like A Bat FC', 'Aloma',       'Para Para',  'Aloma Para Para',   2, 'defender'),
++  ('Like A Bat FC', 'Dorada',      'Dorada',     'Dorada',            8, 'forward'),
++  ('Like A Bat FC', 'Easie',       'Monie',      'Easie Monie',      22, 'midfielder'),
++  ('Like A Bat FC', 'Joe',         'Blue',       'Joe Blue',         14, 'midfielder'),
++  ('Like A Bat FC', 'Mendez',      'Mendez',     'Mendez',           11, 'forward'),
++  ('Like A Bat FC', 'Roteski',     'Roteski',    'Roteski',           4, 'defender'),
++  ('Like A Bat FC', 'Muri',        'Muri',       'Muri',              7, 'forward'),
++  ('Like A Bat FC', 'Damilare',    'Damilare',   'Damilare',         23, 'defender'),
++  ('Like A Bat FC', 'Dimeji',      'Dimeji',     'Dimeji',           20, 'defender'),
++  ('Like A Bat FC', 'Adewale',     'Adewale',    'Adewale',          12, 'defender'),
++  ('Like A Bat FC', 'Stephen',     'Stephen',    'Stephen',          13, 'midfielder'),
++  ('Like A Bat FC', 'Solomon',     'Solomon',    'Solomon',           1, 'goalkeeper');
++
++-- ─── ROYALS FC ────────────────────────────────────────────────
++INSERT INTO incoming_roster (team_name, first_name, last_name, display_name, jersey_number, position) VALUES
++  ('Royals FC', 'Wahab',   'Wahab',   'Wahab',    3, 'defender'),
++  ('Royals FC', 'Lanre',   'Lanre',   'Lanre',   18, 'midfielder'),
++  ('Royals FC', 'Tillesh', 'Tillesh', 'Tillesh',  5, 'defender'),
++  ('Royals FC', 'Lhozy',   'Lhozy',   'Lhozy',    7, 'forward'),
++  ('Royals FC', 'Mayana',  'Mayana',  'Mayana',  19, 'forward'),
++  ('Royals FC', 'Lati',    'Lati',    'Lati',    10, 'midfielder'),
++  ('Royals FC', 'Timmy',   'Timmy',   'Timmy',   16, 'midfielder'),
++  ('Royals FC', 'Ayoola',  'Ayoola',  'Ayoola',   2, 'forward'),
++  ('Royals FC', 'Chidon',  'Chidon',  'Chidon',   9, 'forward'),
++  ('Royals FC', 'German',  'German',  'German',  13, 'forward'),
++  ('Royals FC', 'Teslim',  'Teslim',  'Teslim',   8, 'midfielder'),
++  ('Royals FC', 'Tunde',   'Tunde',   'Tunde',   20, 'defender'),
++  ('Royals FC', 'Toheeb',  'Toheeb',  'Toheeb',   1, 'goalkeeper');
++
++-- For every roster row that doesn't already match an existing player linked to that team, insert
++WITH to_insert AS (
++  SELECT r.first_name, r.last_name, r.display_name, r.jersey_number, r.position,
++         t.id AS team_id
++  FROM   incoming_roster r
++  JOIN   teams t ON t.name = r.team_name
++  WHERE  NOT EXISTS (
++    SELECT 1
++    FROM   player_team_contracts ptc
++    JOIN   players p ON p.id = ptc.player_id
++    WHERE  ptc.team_id    = t.id
++      AND  ptc.is_current = TRUE
++      AND  LOWER(p.display_name) = LOWER(r.display_name)
++  )
++), new_players AS (
++  INSERT INTO players (first_name, last_name, display_name, position, jersey_number)
++  SELECT first_name, last_name, display_name, position, jersey_number FROM to_insert
++  RETURNING id, display_name
++)
++INSERT INTO player_team_contracts (player_id, team_id, jersey_number, start_date, is_current)
++SELECT np.id, ti.team_id, ti.jersey_number, CURRENT_DATE, TRUE
++FROM   new_players np
++JOIN   to_insert  ti ON LOWER(ti.display_name) = LOWER(np.display_name);
++
++COMMIT;
++
++-- Verify
++SELECT t.name AS team, p.display_name, p.jersey_number, p.position
++FROM   players p
++JOIN   player_team_contracts ptc ON ptc.player_id = p.id AND ptc.is_current = TRUE
++JOIN   teams t ON t.id = ptc.team_id
++WHERE  t.name IN ('Supersede FC','Amigos FC','Like A Bat FC','Royals FC')
++ORDER  BY t.name, COALESCE(p.jersey_number, 999), p.display_name;
