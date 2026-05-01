@@ -504,11 +504,8 @@ export default function ScorerPage() {
           <div className="text-xs font-normal opacity-70">{selected.away_short ?? selected.away_team_name}</div>
         </button>
       </div>
-<<<<<<< HEAD
 
-=======
       
->>>>>>> 2df330d6cce0c7061697819d577419783cc54bf9
       {/* Penalties */}
       <div className="grid grid-cols-4 gap-2 mb-3">
         {[
@@ -523,11 +520,8 @@ export default function ScorerPage() {
           </button>
         ))}
       </div>
-<<<<<<< HEAD
 
-=======
       
->>>>>>> 2df330d6cce0c7061697819d577419783cc54bf9
       {/* Cards + Subs */}
       <div className="grid grid-cols-2 gap-2 mb-3">
         {[
