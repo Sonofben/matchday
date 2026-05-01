@@ -505,6 +505,21 @@ export default function ScorerPage() {
         </button>
       </div>
 
+      {/* Penalties */}
+      <div className="grid grid-cols-4 gap-2 mb-3">
+        {[
+          { label:'PEN ✓ Home', type:'penalty_goal',   teamId:selected.home_team_id, color:'bg-green-800' },
+          { label:'PEN ✗ Home', type:'penalty_missed', teamId:selected.home_team_id, color:'bg-orange-800' },
+          { label:'PEN ✓ Away', type:'penalty_goal',   teamId:selected.away_team_id, color:'bg-green-800' },
+          { label:'PEN ✗ Away', type:'penalty_missed', teamId:selected.away_team_id, color:'bg-orange-800' },
+        ].map(({ label, type, teamId, color }) => (
+          <button key={label} onClick={() => setEventModal({ type, teamId })}
+            className={`${color} hover:opacity-90 active:scale-95 text-white py-3 rounded-xl text-[11px] font-medium leading-tight`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
       {/* Cards + Subs */}
       <div className="grid grid-cols-2 gap-2 mb-3">
         {[
@@ -527,7 +542,7 @@ export default function ScorerPage() {
         <div className="bg-[#141920] border border-slate-800 rounded-2xl p-3">
           <p className="text-xs text-slate-500 mb-2">Recent events</p>
           {[...(matchDetail.events)].reverse().slice(0,5).map((ev: any, i: number) => {
-            const icon = ev.event_type === 'goal' || ev.event_type === 'penalty_goal' ? '⚽' : ev.event_type === 'yellow_card' ? '🟨' : ev.event_type === 'red_card' ? '🟥' : ev.event_type === 'substitution' ? '🔄' : '•'
+            const icon = ev.event_type === 'goal' || ev.event_type === 'penalty_goal' ? '⚽' : ev.event_type === 'penalty_missed' ? '❌' : ev.event_type === 'yellow_card' ? '🟨' : ev.event_type === 'red_card' ? '🟥' : ev.event_type === 'substitution' ? '🔄' : '•'
             const name = ev.display_name ?? (ev.first_name ? `${ev.first_name} ${ev.last_name}` : ev.team_name)
             return (
               <div key={`${ev.id}-${i}`} className="flex items-center gap-2 py-1.5 text-xs border-t border-slate-800/50 first:border-0">

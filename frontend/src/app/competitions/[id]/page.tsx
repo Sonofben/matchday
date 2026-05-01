@@ -108,45 +108,70 @@ export default function CompetitionPage() {
       )}
 
       {/* Standings */}
-      {tab === 'Standings' && (
-        <Card>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-800">
-                  {['#','Team','P','W','D','L','GF','GA','GD','Pts','Form'].map(h => (
-                    <th key={h} className="text-left px-3 py-2.5 text-xs text-slate-500 font-medium">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60">
-                {((standings as any)?.standings ?? []).map((s: Standing, i: number) => (
-                  <tr key={s.team_id} className="hover:bg-slate-800/30">
-                    <td className="px-3 py-3 text-slate-500 text-xs">{s.position ?? i+1}</td>
-                    <td className="px-3 py-3">
-                      <div className="flex items-center gap-2">
-                        <TeamLogo name={s.team_name} logoUrl={s.logo_url} size={18} />
-                        <span className="text-slate-200 font-medium">{s.team_name}</span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-3 text-center text-slate-400">{s.played}</td>
-                    <td className="px-3 py-3 text-center text-green-400">{s.won}</td>
-                    <td className="px-3 py-3 text-center text-yellow-400">{s.drawn}</td>
-                    <td className="px-3 py-3 text-center text-red-400">{s.lost}</td>
-                    <td className="px-3 py-3 text-center text-slate-400">{s.goals_for}</td>
-                    <td className="px-3 py-3 text-center text-slate-400">{s.goals_against}</td>
-                    <td className={clsx('px-3 py-3 text-center', s.goal_difference > 0 ? 'text-green-400' : s.goal_difference < 0 ? 'text-red-400' : 'text-slate-400')}>
-                      {s.goal_difference > 0 ? `+${s.goal_difference}` : s.goal_difference}
-                    </td>
-                    <td className="px-3 py-3 text-center font-bold text-white">{s.points}</td>
-                    <td className="px-3 py-3"><FormDots form={s.form} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {tab === 'Standings' && (() => {
+        const allStandings: Standing[] = (standings as any)?.standings ?? []
+        // Group by group_name; null/empty group_name → 'table' (single league)
+        const grouped = allStandings.reduce<Record<string, Standing[]>>((acc, s) => {
+          const key = (s as any).group_name ?? 'table'
+          if (!acc[key]) acc[key] = []
+          acc[key].push(s)
+          return acc
+        }, {})
+        const groupKeys = Object.keys(grouped).sort()
+        return (
+          <div className="space-y-5">
+            {groupKeys.length === 0 && (
+              <Card className="p-10 text-center text-slate-500 text-sm">No standings yet</Card>
+            )}
+            {groupKeys.map(gk => (
+              <div key={gk}>
+                {gk !== 'table' && (
+                  <h3 className="text-sm font-semibold text-green-400 mb-2 px-1 tracking-wide">
+                    {gk.toLowerCase().startsWith('group') ? gk : `Group ${gk}`}
+                  </h3>
+                )}
+                <Card>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-800">
+                          {['#','Team','P','W','D','L','GF','GA','GD','Pts','Form'].map(h => (
+                            <th key={h} className="text-left px-3 py-2.5 text-xs text-slate-500 font-medium">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60">
+                        {grouped[gk].map((s: Standing, i: number) => (
+                          <tr key={s.team_id} className="hover:bg-slate-800/30">
+                            <td className="px-3 py-3 text-slate-500 text-xs">{s.position ?? i+1}</td>
+                            <td className="px-3 py-3">
+                              <div className="flex items-center gap-2">
+                                <TeamLogo name={s.team_name} logoUrl={s.logo_url} size={18} />
+                                <span className="text-slate-200 font-medium">{s.team_name}</span>
+                              </div>
+                            </td>
+                            <td className="px-3 py-3 text-center text-slate-400">{s.played}</td>
+                            <td className="px-3 py-3 text-center text-green-400">{s.won}</td>
+                            <td className="px-3 py-3 text-center text-yellow-400">{s.drawn}</td>
+                            <td className="px-3 py-3 text-center text-red-400">{s.lost}</td>
+                            <td className="px-3 py-3 text-center text-slate-400">{s.goals_for}</td>
+                            <td className="px-3 py-3 text-center text-slate-400">{s.goals_against}</td>
+                            <td className={clsx('px-3 py-3 text-center', s.goal_difference > 0 ? 'text-green-400' : s.goal_difference < 0 ? 'text-red-400' : 'text-slate-400')}>
+                              {s.goal_difference > 0 ? `+${s.goal_difference}` : s.goal_difference}
+                            </td>
+                            <td className="px-3 py-3 text-center font-bold text-white">{s.points}</td>
+                            <td className="px-3 py-3"><FormDots form={s.form} /></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              </div>
+            ))}
           </div>
-        </Card>
-      )}
+        )
+      })()}
 
       {/* Teams */}
       {tab === 'Teams' && (
