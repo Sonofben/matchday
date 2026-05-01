@@ -504,7 +504,22 @@ export default function ScorerPage() {
           <div className="text-xs font-normal opacity-70">{selected.away_short ?? selected.away_team_name}</div>
         </button>
       </div>
-
+      
+      {/* Penalties */}
+      <div className="grid grid-cols-4 gap-2 mb-3">
+        {[
+          { label:'PEN ✓ Home', type:'penalty_goal',   teamId:selected.home_team_id, color:'bg-green-800' },
+          { label:'PEN ✗ Home', type:'penalty_missed', teamId:selected.home_team_id, color:'bg-orange-800' },
+          { label:'PEN ✓ Away', type:'penalty_goal',   teamId:selected.away_team_id, color:'bg-green-800' },
+          { label:'PEN ✗ Away', type:'penalty_missed', teamId:selected.away_team_id, color:'bg-orange-800' },
+        ].map(({ label, type, teamId, color }) => (
+          <button key={label} onClick={() => setEventModal({ type, teamId })}
+            className={`${color} hover:opacity-90 active:scale-95 text-white py-3 rounded-xl text-[11px] font-medium leading-tight`}>
+            {label}
+          </button>
+        ))}
+      </div>
+      
       {/* Cards + Subs */}
       <div className="grid grid-cols-2 gap-2 mb-3">
         {[
